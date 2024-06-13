@@ -212,6 +212,7 @@ nav:
           - ./examples/embeddings/ibm_watsonx.ipynb
           - ./examples/embeddings/upstage.ipynb
           - ./examples/embeddings/oci_genai.ipynb
+          - ./examples/embeddings/ibm_watsonx.ipynb
       - Evaluation:
           - ./examples/evaluation/TonicValidateEvaluators.ipynb
           - ./examples/evaluation/semantic_similarity_eval.ipynb
@@ -336,6 +337,7 @@ nav:
           - ./examples/llm/deepinfra.ipynb
           - ./examples/llm/oci_genai.ipynb
           - ./examples/llm/nvidia_nim.ipynb
+          - ./examples/llm/ibm_watsonx.ipynb
       - Low Level:
           - ./examples/low_level/oss_ingestion_retrieval.ipynb
           - ./examples/low_level/fusion_retriever.ipynb
