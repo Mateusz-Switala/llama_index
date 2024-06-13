@@ -202,6 +202,7 @@ nav:
           - ./examples/embeddings/ipex_llm_gpu.ipynb
           - ./examples/embeddings/nvidia.ipynb
           - ./examples/embeddings/deepinfra.ipynb
+          - ./examples/embeddings/ibm_watsonx.ipynb
       - Evaluation:
           - ./examples/evaluation/TonicValidateEvaluators.ipynb
           - ./examples/evaluation/semantic_similarity_eval.ipynb
@@ -318,6 +319,7 @@ nav:
           - ./examples/llm/mistral_rs.ipynb
           - ./examples/llm/nvidia.ipynb
           - ./examples/llm/mlx.ipynb
+          - ./examples/llm/ibm_watsonx.ipynb
       - Low Level:
           - ./examples/low_level/oss_ingestion_retrieval.ipynb
           - ./examples/low_level/fusion_retriever.ipynb
@@ -749,6 +751,7 @@ nav:
           - ./api_reference/embeddings/together.md
           - ./api_reference/embeddings/vertex.md
           - ./api_reference/embeddings/voyageai.md
+          - ./api_reference/embeddings/ibm_watsonx.md
       - Evaluation:
           - ./api_reference/evaluation/answer_relevancy.md
           - ./api_reference/evaluation/context_relevancy.md
@@ -846,6 +849,7 @@ nav:
           - ./api_reference/llms/vllm.md
           - ./api_reference/llms/watsonx.md
           - ./api_reference/llms/xinference.md
+          - ./api_reference/llms/ibm_watsonx.md
       - Llama Datasets:
           - ./api_reference/llama_dataset/index.md
       - Llama Packs:
