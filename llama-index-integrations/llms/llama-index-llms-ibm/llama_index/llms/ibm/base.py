@@ -1,8 +1,8 @@
-from typing import Any, Dict, Optional, Sequence, Union, Tuple
+from typing import Any, Dict, Optional, Sequence, Union, Tuple, List
 
 from ibm_watsonx_ai import Credentials, APIClient
 from ibm_watsonx_ai.foundation_models import ModelInference
-from ibm_watsonx_ai.metanames import GenTextParamsMetaNames
+from ibm_watsonx_ai.metanames import GenTextParamsMetaNames, GenChatParamsMetaNames
 
 from llama_index.core.base.llms.types import (
     ChatMessage,
@@ -11,6 +11,7 @@ from llama_index.core.base.llms.types import (
     CompletionResponse,
     CompletionResponseGen,
     LLMMetadata,
+    MessageRole,
 )
 from llama_index.core.constants import DEFAULT_CONTEXT_WINDOW
 from llama_index.core.bridge.pydantic import (
@@ -18,9 +19,13 @@ from llama_index.core.bridge.pydantic import (
     PrivateAttr,
 )
 
+from llama_index.core.llms.llm import ToolSelection
+
 # Import SecretStr directly from pydantic
 # since there is not one in llama_index.core.bridge.pydantic
 from pydantic import SecretStr
+
+from llama_index.core.llms.function_calling import FunctionCallingLLM
 
 from llama_index.core.callbacks import CallbackManager
 from llama_index.core.llms.callbacks import llm_chat_callback, llm_completion_callback
@@ -28,16 +33,20 @@ from llama_index.core.base.llms.generic_utils import (
     completion_to_chat_decorator,
     stream_completion_to_chat_decorator,
 )
-from llama_index.core.llms.custom import CustomLLM
+
+from llama_index.core.llms.utils import parse_partial_json
+
 from llama_index.llms.ibm.utils import (
     resolve_watsonx_credentials,
+    to_watsonx_message_dict,
+    from_watsonx_message,
 )
 
 # default max tokens determined by service
 DEFAULT_MAX_TOKENS = 20
 
 
-class WatsonxLLM(CustomLLM):
+class WatsonxLLM(FunctionCallingLLM):
     """
     IBM watsonx.ai large language models.
 
@@ -305,6 +314,11 @@ class WatsonxLLM(CustomLLM):
         """Example of Model generation text kwargs that a user can pass to the model."""
         return GenTextParamsMetaNames().get_example_values()
 
+    @property
+    def sample_chat_generation_params(self) -> Dict[str, Any]:
+        """Example of Model chat generation kwargs that a user can pass to the model."""
+        return GenChatParamsMetaNames().get_example_values()
+
     def _split_generation_params(
         self, data: Dict[str, Any]
     ) -> Tuple[Dict[str, Any] | None, Dict[str, Any]]:
@@ -312,6 +326,19 @@ class WatsonxLLM(CustomLLM):
         kwargs = {}
         sample_generation_kwargs_keys = set(self.sample_generation_text_params.keys())
         sample_generation_kwargs_keys.add("prompt_variables")
+        for key, value in data.items():
+            if key in sample_generation_kwargs_keys:
+                params.update({key: value})
+            else:
+                kwargs.update({key: value})
+        return params if params else None, kwargs
+
+    def _split_chat_generation_params(
+        self, data: Dict[str, Any]
+    ) -> Tuple[Dict[str, Any] | None, Dict[str, Any]]:
+        params = {}
+        kwargs = {}
+        sample_generation_kwargs_keys = set(self.sample_chat_generation_params.keys())
         for key, value in data.items():
             if key in sample_generation_kwargs_keys:
                 params.update({key: value})
@@ -365,6 +392,22 @@ class WatsonxLLM(CustomLLM):
 
         return gen()
 
+    def _chat(self, messages: Sequence[ChatMessage], **kwargs: Any) -> ChatResponse:
+        message_dicts = [to_watsonx_message_dict(message) for message in messages]
+
+        params, generation_kwargs = self._split_chat_generation_params(kwargs)
+        response = self._model.chat(
+            messages=message_dicts, params=params, tools=None, tool_choice=None
+        )
+
+        wx_message = response["choices"][0]["message"]
+        message = from_watsonx_message(wx_message)
+
+        return ChatResponse(
+            message=message,
+            raw=response,
+        )
+
     @llm_chat_callback()
     def chat(self, messages: Sequence[ChatMessage], **kwargs: Any) -> ChatResponse:
         chat_fn = completion_to_chat_decorator(self.complete)
@@ -378,3 +421,77 @@ class WatsonxLLM(CustomLLM):
         chat_stream_fn = stream_completion_to_chat_decorator(self.stream_complete)
 
         return chat_stream_fn(messages, **kwargs)
+
+    def _prepare_chat_with_tools(
+        self,
+        tools: List["BaseTool"],
+        user_msg: Optional[Union[str, ChatMessage]] = None,
+        chat_history: Optional[List[ChatMessage]] = None,
+        verbose: bool = False,
+        allow_parallel_tool_calls: bool = False,
+        tool_choice: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Predict and call the tool."""
+        # watsonx uses the same openai tool format
+        tool_specs = [tool.metadata.to_openai_tool() for tool in tools]
+
+        if isinstance(user_msg, str):
+            user_msg = ChatMessage(role=MessageRole.USER, content=user_msg)
+
+        messages = chat_history or []
+        if user_msg:
+            messages.append(user_msg)
+
+        chat_with_tools_payload = {
+            "messages": messages,
+            "tools": tool_specs or None,
+            **kwargs,
+        }
+        if tool_choice is not None:
+            chat_with_tools_payload.update(
+                {"tool_choice": {"type": "function", "function": {"name": tool_choice}}}
+            )
+        return chat_with_tools_payload
+
+    def get_tool_calls_from_response(
+        self,
+        response: ChatResponse,
+        error_on_no_tool_call: bool = True,
+        **kwargs: Any,
+    ) -> List[ToolSelection]:
+        """Predict and call the tool."""
+        tool_calls = response.message.additional_kwargs.get("tool_calls", [])
+
+        if len(tool_calls) < 1:
+            if error_on_no_tool_call:
+                raise ValueError(
+                    f"Expected at least one tool call, but got {len(tool_calls)} tool calls."
+                )
+            else:
+                return []
+
+        tool_selections = []
+        for tool_call in tool_calls:
+            if not isinstance(tool_call, dict):
+                raise ValueError("Invalid tool_call object")
+            if tool_call.get('type"') != "function":
+                raise ValueError("Invalid tool type. Unsupported by OpenAI")
+
+            # this should handle both complete and partial jsons
+            try:
+                argument_dict = parse_partial_json(
+                    tool_call.get("function", {}).get("arguments")
+                )
+            except ValueError:
+                argument_dict = {}
+
+            tool_selections.append(
+                ToolSelection(
+                    tool_id=tool_call.get("id"),
+                    tool_name=tool_call.get("function").get("name"),
+                    tool_kwargs=argument_dict,
+                )
+            )
+
+        return tool_selections
